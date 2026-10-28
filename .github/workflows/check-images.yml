@@ -17,7 +17,18 @@ jobs:
           fetch-depth: 0
 
       - name: Check file types, names and sizes
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
         run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            baseline="origin/${BASE_REF}"
+          elif [ -n "$BEFORE" ] && [ "${BEFORE//0/}" != "" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            baseline="$BEFORE"
+          else
+            baseline=""
+          fi
           fail=0
           while IFS= read -r -d '' f; do
             base=$(basename "$f")
@@ -26,7 +37,8 @@ jobs:
               *.png|*.jpg|*.jpeg|*.gif) ;;
               *) echo "::error file=$f::Not allowed: only .png, .jpg, .jpeg and .gif files are accepted (no SVG or WebP, many mail clients cannot show them)."; fail=1 ;;
             esac
-            if ! printf '%s' "$base" | grep -Eq '^[a-z0-9-]+\.(png|jpg|jpeg|gif)$'; then
+            if { [ -z "$baseline" ] || ! git cat-file -e "$baseline:$f" 2>/dev/null; } &&
+              ! printf '%s' "$base" | grep -Eq '^[a-z0-9-]+\.(png|jpg|jpeg|gif)$'; then
               echo "::error file=$f::Bad file name '$base': use only lowercase letters, digits and hyphens (no spaces, no uppercase), then the extension."; fail=1
             fi
             size=$(stat -c %s "$f")
