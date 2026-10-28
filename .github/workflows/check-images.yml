@@ -1,0 +1,59 @@
+name: check-images
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Check file types, names and sizes
+        run: |
+          fail=0
+          while IFS= read -r -d '' f; do
+            base=$(basename "$f")
+            [ "$base" = ".gitkeep" ] && continue
+            case "$base" in
+              *.png|*.jpg|*.jpeg|*.gif) ;;
+              *) echo "::error file=$f::Not allowed: only .png, .jpg, .jpeg and .gif files are accepted (no SVG or WebP, many mail clients cannot show them)."; fail=1 ;;
+            esac
+            if ! printf '%s' "$base" | grep -Eq '^[a-z0-9-]+\.(png|jpg|jpeg|gif)$'; then
+              echo "::error file=$f::Bad file name '$base': use only lowercase letters, digits and hyphens (no spaces, no uppercase), then the extension."; fail=1
+            fi
+            size=$(stat -c %s "$f")
+            if [ "$size" -gt 102400 ]; then
+              echo "::error file=$f::Too large: $((size / 1024)) KB. Images must be 100 KB or smaller (aim for under 50 KB)."; fail=1
+            fi
+          done < <(find images -type f -print0)
+          exit $fail
+
+      - name: Check published images were not changed
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT" = "pull_request" ]; then
+            range="origin/${BASE_REF}...HEAD"
+          elif [ -n "$BEFORE" ] && [ "${BEFORE//0/}" != "" ] && git cat-file -e "$BEFORE^{commit}" 2>/dev/null; then
+            range="$BEFORE..HEAD"
+          else
+            echo "No previous commit to compare with; skipping."
+            exit 0
+          fi
+          changed=$(git diff --name-status -M --diff-filter=DRM "$range" -- images/)
+          if [ -n "$changed" ]; then
+            echo "$changed"
+            echo "::error::Published images must never be deleted, renamed or modified (listed above; D=deleted, R=renamed, M=modified). Upload the fixed image under a new file name or in a new version folder (v2, v3, ...) instead."
+            exit 1
+          fi
+          echo "OK: no existing image was deleted, renamed or modified."

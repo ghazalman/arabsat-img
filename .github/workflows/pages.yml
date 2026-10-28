@@ -1,0 +1,119 @@
+name: Deploy images to GitHub Pages
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "images/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/configure-pages@v6
+
+      - name: Build site and catalogue
+        env:
+          REPO: ${{ github.repository }}
+        run: |
+          mkdir -p _site
+          cp -R images _site/images
+          python3 - <<'PY'
+          import html, os, struct
+
+          repo = os.environ["REPO"]
+          owner, name = repo.split("/")
+          pages = f"https://{owner.lower()}.github.io/{name}"
+          jsd = f"https://cdn.jsdelivr.net/gh/{owner}/{name}@v1"
+          exts = (".png", ".jpg", ".jpeg", ".gif")
+
+          def dims(path):
+              with open(path, "rb") as f:
+                  d = f.read()
+              try:
+                  if d[:8] == b"\x89PNG\r\n\x1a\n":
+                      return struct.unpack(">II", d[16:24])
+                  if d[:6] in (b"GIF87a", b"GIF89a"):
+                      return struct.unpack("<HH", d[6:10])
+                  if d[:2] == b"\xff\xd8":
+                      i = 2
+                      while i + 9 < len(d):
+                          if d[i] != 0xFF:
+                              i += 1
+                              continue
+                          m = d[i + 1]
+                          if m in (0xD8, 0x01) or 0xD0 <= m <= 0xD7 or m == 0xFF:
+                              i += 1 if m == 0xFF else 2
+                              continue
+                          if m in range(0xC0, 0xCF) and m not in (0xC4, 0xC8, 0xCC):
+                              h, w = struct.unpack(">HH", d[i + 5:i + 9])
+                              return w, h
+                          i += 2 + struct.unpack(">H", d[i + 2:i + 4])[0]
+              except struct.error:
+                  pass
+              return None
+
+          items = []
+          for root, _, files in os.walk("_site/images"):
+              for fn in files:
+                  if fn.lower().endswith(exts):
+                      p = os.path.join(root, fn)
+                      items.append(os.path.relpath(p, "_site").replace(os.sep, "/"))
+          items.sort()
+
+          cards = []
+          for rel in items:
+              size = os.path.getsize("_site/" + rel) / 1024
+              dm = dims("_site/" + rel)
+              dtxt = f"{dm[0]} x {dm[1]} px" if dm else "unknown size"
+              e = html.escape
+              cards.append(
+                  f'<div class="card"><div class="thumb"><img src="{e(rel)}" alt="{e(rel)}"></div>'
+                  f'<div class="info"><b>{e(rel)}</b><br>{size:.1f} KB &middot; {dtxt}<br>'
+                  f'Pages URL:<code>{e(pages)}/{e(rel)}</code>'
+                  f'jsDelivr URL:<code>{e(jsd)}/{e(rel)}</code></div></div>'
+              )
+          body = "\n".join(cards) or "<p>No images published yet.</p>"
+          page = f"""<!DOCTYPE html>
+          <html lang="en"><head><meta charset="utf-8">
+          <meta name="viewport" content="width=device-width, initial-scale=1">
+          <title>ARABSAT Email Assets</title>
+          <style>
+          body{{font-family:Arial,sans-serif;margin:24px;color:#222}}
+          .card{{display:flex;flex-wrap:wrap;gap:16px;margin:0 0 16px;border:1px solid #ccc;padding:12px}}
+          .thumb{{background:#000B80;padding:16px;display:flex;align-items:center;justify-content:center;min-width:200px}}
+          .thumb img{{max-width:300px;max-height:150px}}
+          .info{{flex:1;min-width:280px;font-size:14px}}
+          code{{display:block;background:#f2f2f2;padding:4px;margin:2px 0 8px;word-break:break-all;user-select:all}}
+          </style></head><body>
+          <h1>ARABSAT Email Assets</h1>
+          {body}
+          </body></html>
+          """
+          page = "\n".join(l.lstrip() for l in page.splitlines())
+          open("_site/index.html", "w", encoding="utf-8").write(page)
+          print(f"Catalogue lists {len(items)} image(s)")
+          PY
+          touch _site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v5
+        with:
+          path: _site
+
+      - id: deployment
+        uses: actions/deploy-pages@v5
