@@ -34,16 +34,20 @@ jobs:
             base=$(basename "$f")
             [ "$base" = ".gitkeep" ] && continue
             case "$base" in
-              *.png|*.jpg|*.jpeg|*.gif) ;;
-              *) echo "::error file=$f::Not allowed: only .png, .jpg, .jpeg and .gif files are accepted (no SVG or WebP, many mail clients cannot show them)."; fail=1 ;;
+              *.png|*.jpg|*.jpeg|*.gif|*.mp4) ;;
+              *) echo "::error file=$f::Not allowed: only .png, .jpg, .jpeg, .gif and .mp4 files are accepted (no SVG or WebP, many mail clients cannot show them)."; fail=1 ;;
             esac
             if { [ -z "$baseline" ] || ! git cat-file -e "$baseline:$f" 2>/dev/null; } &&
-              ! printf '%s' "$base" | grep -Eq '^[a-z0-9-]+\.(png|jpg|jpeg|gif)$'; then
+              ! printf '%s' "$base" | grep -Eq '^[a-z0-9-]+\.(png|jpg|jpeg|gif|mp4)$'; then
               echo "::error file=$f::Bad file name '$base': use only lowercase letters, digits and hyphens (no spaces, no uppercase), then the extension."; fail=1
             fi
             size=$(stat -c %s "$f")
-            if [ "$size" -gt 102400 ]; then
-              echo "::error file=$f::Too large: $((size / 1024)) KB. Images must be 100 KB or smaller (aim for under 50 KB)."; fail=1
+            case "$base" in
+              *.mp4) limit=5242880; label="Videos must be 5 MB or smaller" ;;
+              *) limit=102400; label="Images must be 100 KB or smaller (aim for under 50 KB)" ;;
+            esac
+            if [ "$size" -gt "$limit" ]; then
+              echo "::error file=$f::Too large: $((size / 1024)) KB. $label."; fail=1
             fi
           done < <(find images -type f -print0)
           exit $fail
